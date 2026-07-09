@@ -41,8 +41,9 @@ icons, and checks each remaining file for existence. Consequences:
    type English again. The transliteration follows Malayalam Wikipedia's own **ml-transliteration
    (മൊഴി)** scheme and is self-contained (no dependency on ULS/jQuery.IME). A few conventions worth
    knowing: `t`→റ്റ, `tt`→ട്ട, `th`→ത, `T`→ട; `nt`→ന്റ (എന്റെ = `ente`), `nth`→ന്ത (എന്ത് = `enth`);
-   long vowels double or capitalise (`aa`/`A`→ആ, `ee`→ഈ, `E`→ഏ, `O`→ഓ); `sh`→ശ, `Sh`→ഷ, `zh`→ഴ,
-   `N`→ണ, `L`→ള. Examples: `malayaaLam`→മലയാളം, `analitikkal`→അനലിറ്റിക്കൽ, `kuTTi`→കുട്ടി.
+   long vowels double or capitalise (`aa`/`A`→ആ, `ee`→ഈ, `E`→ഏ, `O`→ഓ); sibilants follow the
+   Wikipedia scheme — `s`→സ, `S`→ശ, `sh`→ഷ, `Sh`→ഴ, `z`→ശ, `zh`→ഴ, `x`→ക്ഷ; `N`→ണ, `L`→ള.
+   Examples: `malayaaLam`→മലയാളം, `analitikkal`→അനലിറ്റിക്കൽ, `kuTTi`→കുട്ടി, `Siva`→ശിവ.
 4. **Placement is automatic** — inserting chooses where the image belongs from the wikitext:
    - if the article has a **broken file link**, the dead filename is replaced in place (this
      repairs a broken infobox image);

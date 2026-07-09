@@ -623,10 +623,12 @@
 				return { text: fillCaptionParam(text.replace(re, safe), caption), mode: 'broken' };
 			}
 		}
-		// 2. Fill an empty infobox image= parameter.
+		// 2. Fill an infobox image= parameter that is empty — treating a value
+		// that is only an HTML comment (the "<!-- filename only... -->"
+		// placeholder copied from enwiki) as empty too.
 		var imgParam = /(\|[ \t]*(?:image|ചിത്രം)[ \t]*=)([ \t]*)([^\n|}]*)/i;
 		var m = text.match(imgParam);
-		if (m && !m[3].trim()) {
+		if (m && !m[3].replace(/<!--[\s\S]*?-->/g, '').trim()) {
 			var filled = text.replace(imgParam, '$1 ' + safe);
 			return { text: fillCaptionParam(filled, caption), mode: 'infobox' };
 		}
@@ -732,11 +734,11 @@
 		var CONS = {
 			'zh': 'ഴ', 'ng': 'ങ', 'nj': 'ഞ', 'kh': 'ഖ', 'gh': 'ഘ', 'chh': 'ഛ',
 			'Ch': 'ഛ', 'ch': 'ച', 'jh': 'ഝ', 'Th': 'ഠ', 'Dh': 'ഢ', 'thh': 'ഥ',
-			'tt': 'ട്ട', 'th': 'ത', 'dh': 'ധ', 'Sh': 'ഷ', 'sh': 'ശ', 'ph': 'ഫ', 'bh': 'ഭ',
+			'tt': 'ട്ട', 'th': 'ത', 'dh': 'ധ', 'Sh': 'ഴ', 'sh': 'ഷ', 'ph': 'ഫ', 'bh': 'ഭ',
 			'k': 'ക', 'g': 'ഗ', 'c': 'ച', 'j': 'ജ', 'T': 'ട', 'D': 'ഡ', 'N': 'ണ',
 			't': 'റ്റ', 'd': 'ദ', 'n': 'ന', 'p': 'പ', 'f': 'ഫ', 'b': 'ബ', 'm': 'മ',
 			'y': 'യ', 'r': 'ര', 'R': 'റ', 'l': 'ല', 'L': 'ള', 'v': 'വ', 'w': 'വ',
-			'S': 'ശ', 's': 'സ', 'h': 'ഹ'
+			'S': 'ശ', 's': 'സ', 'z': 'ശ', 'x': 'ക്ഷ', 'X': 'ക്ഷ', 'h': 'ഹ'
 		};
 		var VKEYS = Object.keys(VIND).sort(function (a, b) { return b.length - a.length; });
 		var CKEYS = Object.keys(CONS).sort(function (a, b) { return b.length - a.length; });
