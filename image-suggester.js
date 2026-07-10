@@ -17,9 +17,10 @@
  *      on the page and checks for an enwiki langlink. The article counts
  *      as image-less only if none of its (non-icon) files exist — a broken
  *      infobox image link therefore still counts as image-less.
- *   2. If the article is image-less and an English counterpart exists, a
- *      floating button and a toolbox link appear.
- *   3. Clicking fetches the English article's media list (REST API),
+ *   2. If the article is image-less and an English counterpart exists and it
+ *      was reached from the finder (a "#imgsug" fragment), the suggestion
+ *      panel opens automatically.
+ *   3. The panel fetches the English article's media list (REST API),
  *      keeps only images that exist on Wikimedia Commons (fair-use files
  *      local to enwiki are excluded automatically), and shows them with
  *      thumbnails, captions and licenses.
@@ -80,24 +81,10 @@
 				// Image-less only if none of the (non-icon) files actually exist.
 				if (files.some(function (t) { return exists[t]; })) { return; }
 				enTitle = page.langlinks[0].title;
-				addEntryPoints();
 				// Arriving from the finder: open the suggestions right away.
 				if (location.hash === '#imgsug') { openPanel(); }
 			});
 		});
-	}
-
-	function addEntryPoints() {
-		mw.util.addPortletLink('p-tb', '#', 'ചിത്രനിർദ്ദേശങ്ങൾ', 't-image-suggester',
-			'ഇംഗ്ലീഷ് വിക്കിപീഡിയയിൽ നിന്നുള്ള ചിത്രനിർദ്ദേശങ്ങൾ കാണിക്കുക');
-		$('#t-image-suggester').on('click', function (e) { e.preventDefault(); openPanel(); });
-
-		$('<button>')
-			.attr('id', 'imgsug-fab')
-			.attr('title', 'ഈ ലേഖനത്തിൽ ചിത്രങ്ങളില്ല — ഇംഗ്ലീഷ് വിക്കിപീഡിയയിൽ നിന്നുള്ള നിർദ്ദേശങ്ങൾ കാണുക')
-			.text('📷 ചിത്രനിർദ്ദേശങ്ങൾ')
-			.on('click', openPanel)
-			.appendTo(document.body);
 	}
 
 	// ---------- Finder: locate image-less articles worth illustrating ----------
@@ -108,15 +95,32 @@
 		$('#t-image-suggester-find').on('click', function (e) { e.preventDefault(); openFinder(); });
 	}
 
-	function saveFinderState(mode, query) {
+	function saveFinderState(mode, query, minimized) {
 		try {
 			sessionStorage.setItem(FINDER_KEY, JSON.stringify({
-				mode: mode, query: query, rows: finderRows, cont: finderContinue
+				mode: mode, query: query, rows: finderRows, cont: finderContinue, min: !!minimized
 			}));
 		} catch (e) {}
 	}
 	function clearFinderState() {
 		try { sessionStorage.removeItem(FINDER_KEY); } catch (e) {}
+	}
+
+	// A persistent "not interested / already done" set (localStorage) so repeat
+	// scans surface fresh articles instead of the same ones over and over.
+	var SKIP_KEY = 'imgsug-skip';
+	function normTitle(t) { return (t || '').replace(/ /g, '_'); }
+	function loadSkip() {
+		try { return new Set(JSON.parse(localStorage.getItem(SKIP_KEY) || '[]')); } catch (e) { return new Set(); }
+	}
+	function addSkip(title) {
+		try {
+			var s = loadSkip();
+			s.add(normTitle(title));
+			var arr = Array.from(s);
+			if (arr.length > 3000) { arr = arr.slice(arr.length - 3000); }
+			localStorage.setItem(SKIP_KEY, JSON.stringify(arr));
+		} catch (e) {}
 	}
 
 	function openFinder() {
@@ -125,10 +129,14 @@
 		try { saved = JSON.parse(sessionStorage.getItem(FINDER_KEY) || 'null'); } catch (e) { saved = null; }
 		finderRows = (saved && saved.rows) || [];
 		finderContinue = (saved && saved.cont) || null;
+		var minimized = !!(saved && saved.min);
 
 		finder = $('<div>').attr('id', 'imgsug-finder').addClass('imgsug-panel-base').appendTo(document.body);
+		var minBtn = $('<a>').addClass('imgsug-min').attr('href', '#').attr('title', 'ചെറുതാക്കുക').text('–')
+			.on('click', function (e) { e.preventDefault(); setMinimized(!minimized); persist(); });
 		$('<div>').addClass('imgsug-head')
 			.append($('<span>').text('ചിത്രമില്ലാത്ത ലേഖനങ്ങൾ'))
+			.append(minBtn)
 			.append($('<a>').addClass('imgsug-close').attr('href', '#').text('✕')
 				.on('click', function (e) { e.preventDefault(); clearFinderState(); finder.remove(); finder = null; }))
 			.appendTo(finder);
@@ -184,34 +192,52 @@
 
 		// Keep pulling batches automatically until we have collected a useful
 		// number of suggestions, so the user rarely has to click "show more".
-		function persist() { saveFinderState(mode.val(), query.val()); }
+		// Collapse the finder to just its title bar (state persists across pages).
+		function setMinimized(state) {
+			minimized = state;
+			form.toggle(!state);
+			results.toggle(!state);
+			more.toggle(!state && !!finderContinue && finderRows.length < MAX_ENTRIES);
+			minBtn.text(state ? '+' : '–').attr('title', state ? 'വലുതാക്കുക' : 'ചെറുതാക്കുക');
+		}
+		var MAX_ENTRIES = 10; // auto-load up to this many entries; never keep more.
+		function persist() { saveFinderState(mode.val(), query.val(), minimized); }
 
-		function run(reset, target) {
+		// Remove one entry the user isn't interested in (list stays persisted).
+		function dismiss(row, card) {
+			addSkip(row.ml); // never surface a dismissed article again
+			finderRows = finderRows.filter(function (x) { return x.ml !== row.ml; });
+			card.remove();
+			persist();
+			more.toggle(!!finderContinue && finderRows.length < MAX_ENTRIES).off('click').on('click', function () { run(false); });
+		}
+
+		function run(reset) {
 			if (reset) { results.empty(); finderContinue = null; finderRows = []; }
 			more.hide();
 			go.prop('disabled', true);
 			var status = $('<div>').addClass('imgsug-status').appendTo(results);
-			var found = 0, scanned = 0, batches = 0;
-			var TARGET = target || 6, MAX_SCAN = 500, MAX_BATCHES = 20;
+			var scanned = 0, batches = 0;
+			var MAX_SCAN = 500, MAX_BATCHES = 20;
 			function step() {
-				status.text('തിരയുന്നു… (പരിശോധിച്ചത്: ' + scanned + ', കണ്ടെത്തിയത്: ' + found + ')');
+				status.text('തിരയുന്നു… (പരിശോധിച്ചത്: ' + scanned + ', കണ്ടെത്തിയത്: ' + finderRows.length + ')');
 				findBatch(mode.val(), query.val().trim()).then(function (r) {
 					scanned += r.scanned;
 					batches += 1;
 					r.rows.forEach(function (row) {
-						if (!finderRows.some(function (x) { return x.ml === row.ml; })) {
+						if (finderRows.length < MAX_ENTRIES && !finderRows.some(function (x) { return x.ml === row.ml; })) {
 							finderRows.push(row);
-							renderFinderRow(results, row);
-							found += 1;
+							renderFinderRow(results, row, dismiss);
 						}
 					});
 					var canContinue = r.hasMore && r.scanned > 0;
-					if (found < TARGET && scanned < MAX_SCAN && batches < MAX_BATCHES && canContinue) {
+					var needMore = finderRows.length < MAX_ENTRIES;
+					if (needMore && scanned < MAX_SCAN && batches < MAX_BATCHES && canContinue) {
 						step();
 					} else {
-						status.text('പരിശോധിച്ചത്: ' + scanned + ' — കണ്ടെത്തിയത്: ' + found);
+						status.text('പരിശോധിച്ചത്: ' + scanned + ' — കണ്ടെത്തിയത്: ' + finderRows.length);
 						go.prop('disabled', false);
-						more.toggle(canContinue).off('click').on('click', function () { run(false); });
+						more.toggle(canContinue && needMore).off('click').on('click', function () { run(false); });
 						persist();
 					}
 				}, function (msg) {
@@ -235,14 +261,15 @@
 			if (added) {
 				finderRows = finderRows.filter(function (row) { return row.ml.replace(/ /g, '_') !== added; });
 			}
-			finderRows.forEach(function (row) { renderFinderRow(results, row); });
+			finderRows.forEach(function (row) { renderFinderRow(results, row, dismiss); });
 			persist();
-			if (added && finderRows.length < 6) {
-				// Refill the list with fresh image-less articles.
-				run(false, 6 - finderRows.length);
+			if (added && finderRows.length < MAX_ENTRIES) {
+				// Refill the list with fresh image-less articles (up to the cap).
+				run(false);
 			} else {
-				more.toggle(!!finderContinue).off('click').on('click', function () { run(false); });
+				more.toggle(!!finderContinue && finderRows.length < MAX_ENTRIES).off('click').on('click', function () { run(false); });
 			}
+			if (minimized) { setMinimized(true); }
 		} else {
 			persist();
 		}
@@ -258,7 +285,8 @@
 		return prep.then(function () {
 			var params = {
 				action: 'query',
-				prop: 'images|langlinks|info',
+				prop: 'images|langlinks|info|pageprops',
+				ppprop: 'wikibase_item',
 				imlimit: 'max',
 				lllang: 'en',
 				lllimit: 'max',
@@ -312,13 +340,21 @@
 				var allFiles = [];
 				langlinked.forEach(function (p) { allFiles = allFiles.concat(imageFilesOf(p)); });
 				return checkFilesExist(allFiles).then(function (exists) {
+					var skip = loadSkip();
 					var candidates = langlinked.filter(function (p) {
-						return !imageFilesOf(p).some(function (t) { return exists[t]; });
+						return !skip.has(normTitle(p.title)) &&
+							!imageFilesOf(p).some(function (t) { return exists[t]; });
 					}).map(function (p) {
-						return { ml: p.title, en: p.langlinks[0].title };
+						return { ml: p.title, en: p.langlinks[0].title, qid: p.pageprops && p.pageprops.wikibase_item };
 					});
 					if (!candidates.length) { return result; }
 
+					// People mode: keep only actual humans (Wikidata P31 = Q5), dropping
+					// ethnic groups / observances / institutions in the People tree.
+					var vetted = (mode === 'people') ? filterToHumans(candidates) : $.Deferred().resolve(candidates).promise();
+					return vetted.then(function (persons) {
+					candidates = persons;
+					if (!candidates.length) { return result; }
 					var enwiki = new mw.ForeignApi('https://en.wikipedia.org/w/api.php', { anonymous: true });
 					return enwiki.get({
 						action: 'query',
@@ -375,9 +411,33 @@
 							return result;
 						});
 					});
+					});
 				});
 			});
 		});
+	}
+
+	// Keep only candidates whose Wikidata item is instance-of (P31) human (Q5),
+	// so the "people" mode shows biographies rather than ethnic groups, days, etc.
+	function filterToHumans(candidates) {
+		var qids = candidates.map(function (c) { return c.qid; }).filter(Boolean);
+		if (!qids.length) { return $.Deferred().resolve([]).promise(); }
+		var wd = new mw.ForeignApi('https://www.wikidata.org/w/api.php', { anonymous: true });
+		return wd.get({
+			action: 'wbgetentities',
+			ids: qids.slice(0, 50).join('|'),
+			props: 'claims',
+			formatversion: 2
+		}).then(function (d) {
+			var ents = (d && d.entities) || {};
+			return candidates.filter(function (c) {
+				var p31 = c.qid && ents[c.qid] && ents[c.qid].claims && ents[c.qid].claims.P31;
+				return p31 && p31.some(function (cl) {
+					var v = cl.mainsnak && cl.mainsnak.datavalue && cl.mainsnak.datavalue.value;
+					return v && v.id === 'Q5';
+				});
+			});
+		}, function () { return candidates; });
 	}
 
 	// The localized "pages with broken file links" tracking category.
@@ -434,7 +494,7 @@
 		}, $.Deferred().resolve().promise()).then(function () { return exists; });
 	}
 
-	function renderFinderRow(container, row) {
+	function renderFinderRow(container, row, onDismiss) {
 		var card = $('<a>').addClass('imgsug-row')
 			.attr('href', mw.util.getUrl(row.ml) + '#imgsug')
 			.appendTo(container);
@@ -443,6 +503,11 @@
 			.append($('<div>').addClass('imgsug-name').text(row.ml))
 			.append($('<div>').addClass('imgsug-license').text('en: ' + row.en))
 			.appendTo(card);
+		if (onDismiss) {
+			$('<span>').addClass('imgsug-dismiss').text('✕').attr('title', 'പട്ടികയിൽ നിന്ന് ഒഴിവാക്കുക')
+				.on('click', function (e) { e.preventDefault(); e.stopPropagation(); onDismiss(row, card); })
+				.appendTo(card);
+		}
 	}
 
 	// ---------- Suggestion panel ----------
@@ -467,11 +532,41 @@
 		var body = $('<div>').addClass('imgsug-body')
 			.text('ലോഡ് ചെയ്യുന്നു…')
 			.appendTo(panel);
-		fetchSuggestions().then(function (images) {
-			renderSuggestions(body, images);
+		// For a biography, pre-fill captions with the person's Malayalam name
+		// (the page title) so it only needs expanding.
+		$.when(fetchSuggestions(), checkIsBiography()).then(function (images, isBio) {
+			renderSuggestions(body, images, isBio ? mw.config.get('wgTitle') : null);
 		}, function (msg) {
 			body.text(msg || 'ചിത്രങ്ങൾ ലഭ്യമാക്കുന്നതിൽ പിഴവ് സംഭവിച്ചു.');
 		});
+	}
+
+	// Resolve true if the current article's Wikidata item is instance-of (P31)
+	// human (Q5) — i.e. the page is a biography.
+	function checkIsBiography() {
+		return api.get({
+			action: 'query',
+			prop: 'pageprops',
+			ppprop: 'wikibase_item',
+			titles: PAGE,
+			formatversion: 2
+		}).then(function (d) {
+			var p = d.query && d.query.pages && d.query.pages[0];
+			var qid = p && p.pageprops && p.pageprops.wikibase_item;
+			if (!qid) { return false; }
+			var wd = new mw.ForeignApi('https://www.wikidata.org/w/api.php', { anonymous: true });
+			return wd.get({
+				action: 'wbgetclaims',
+				entity: qid,
+				property: 'P31',
+				format: 'json'
+			}).then(function (c) {
+				return ((c.claims && c.claims.P31) || []).some(function (cl) {
+					var v = cl.mainsnak && cl.mainsnak.datavalue && cl.mainsnak.datavalue.value;
+					return v && v.id === 'Q5';
+				});
+			}, function () { return false; });
+		}, function () { return false; });
 	}
 
 	// Fetch the English article's media list, then keep only files that
@@ -528,7 +623,7 @@
 		});
 	}
 
-	function renderSuggestions(body, images) {
+	function renderSuggestions(body, images, defaultCaption) {
 		body.empty();
 		images.forEach(function (img) {
 			var card = $('<div>').addClass('imgsug-card').appendTo(body);
@@ -546,7 +641,7 @@
 			var capRow = $('<div>').addClass('imgsug-caprow').appendTo(meta);
 			var captionInput = $('<input>').attr('type', 'text')
 				.attr('placeholder', 'അടിക്കുറിപ്പ് (മലയാളത്തിൽ)')
-				.val(img.caption) // English caption prefilled — translate before inserting
+				.val(defaultCaption || img.caption) // biography: prefill the Malayalam name
 				.appendTo(capRow);
 			var xlit = $('<button>').addClass('imgsug-xlit').text('A')
 				.attr('title', 'മലയാളം ലിപ്യന്തരണം ഓണാക്കുക (ഇംഗ്ലീഷിൽ ടൈപ്പ് ചെയ്യുക)')
@@ -558,6 +653,7 @@
 					btn.prop('disabled', true).text('ചേർക്കുന്നു…');
 					insertImage(img.name, captionInput.val().trim()).then(function () {
 						mw.notify('ചിത്രം ചേർത്തു. താൾ പുതുക്കുന്നു…');
+						addSkip(PAGE); // don't surface an article we've illustrated again
 						// Tell the finder to drop this article and refill the list.
 						try { if (sessionStorage.getItem(FINDER_KEY)) { sessionStorage.setItem('imgsug-added', PAGE); } } catch (e) {}
 						location.reload();
@@ -594,20 +690,28 @@
 				var brokenBare = files.filter(function (t) { return !exists[t]; })
 					.map(function (t) { return t.replace(/^[^:]+:/, ''); });
 				var placed = placeImage(text, fileName, caption, brokenBare);
-				var how = placed.mode === 'broken' ? 'പ്രവർത്തനരഹിതമായ ചിത്രക്കണ്ണി ശരിയാക്കി'
-					: placed.mode === 'infobox' ? 'വിവരപ്പെട്ടിയിൽ ചിത്രം ചേർത്തു'
-						: 'ചിത്രം ചേർത്തു';
-				return api.postWithEditToken({
-					action: 'edit',
-					title: PAGE,
-					text: placed.text,
-					summary: '[[:en:' + enTitle + ']]-ൽ നിന്നുള്ള ചിത്രം — ' + how + ' (' + SCRIPT_LINK + ' ഉപയോഗിച്ച്)',
-					basetimestamp: rev.timestamp,
-					nocreate: 1
-				}).then(function (r) {
-					if (!r.edit || r.edit.result !== 'Success') {
-						return $.Deferred().reject((r.edit && r.edit.result) || 'unknown').promise();
-					}
+				// Verify an infobox/broken placement really renders the image; if
+				// the infobox ignores the parameter, fall back to a lead thumbnail.
+				var check = (placed.mode === 'infobox' || placed.mode === 'broken')
+					? verifyRenders(placed.text, fileName)
+					: $.Deferred().resolve(true).promise();
+				return check.then(function (renders) {
+					if (!renders) { placed = leadPlacement(text, fileName, caption); }
+					var how = placed.mode === 'broken' ? 'പ്രവർത്തനരഹിതമായ ചിത്രക്കണ്ണി ശരിയാക്കി'
+						: placed.mode === 'infobox' ? 'വിവരപ്പെട്ടിയിൽ ചിത്രം ചേർത്തു'
+							: 'ചിത്രം ചേർത്തു';
+					return api.postWithEditToken({
+						action: 'edit',
+						title: PAGE,
+						text: placed.text,
+						summary: '[[:en:' + enTitle + ']]-ൽ നിന്നുള്ള ചിത്രം — ' + how + ' (' + SCRIPT_LINK + ' ഉപയോഗിച്ച്)',
+						basetimestamp: rev.timestamp,
+						nocreate: 1
+					}).then(function (r) {
+						if (!r.edit || r.edit.result !== 'Success') {
+							return $.Deferred().reject((r.edit && r.edit.result) || 'unknown').promise();
+						}
+					});
 				});
 			});
 		});
@@ -647,6 +751,35 @@
 		var lines = text.split('\n');
 		lines.splice(pos, 0, wikilink);
 		return { text: lines.join('\n'), mode: 'lead' };
+	}
+
+	// Insert a lead thumbnail after any leading maintenance templates.
+	function leadPlacement(text, fileName, caption) {
+		var wikilink = '[[പ്രമാണം:' + fileName + '|ലഘുചിത്രം' +
+			(caption ? '|' + caption : '') + ']]';
+		var pos = findInsertLine(text);
+		var lines = text.split('\n');
+		lines.splice(pos, 0, wikilink);
+		return { text: lines.join('\n'), mode: 'lead' };
+	}
+
+	// Check (via the parse API) whether a wikitext actually renders the file
+	// as an image. Some mlwiki infoboxes ignore a bare filename in their
+	// image= parameter (or expect a full [[...]] link) and show it as text.
+	function verifyRenders(wikitext, fileName) {
+		return api.post({
+			action: 'parse',
+			title: PAGE,
+			text: wikitext,
+			prop: 'images',
+			contentmodel: 'wikitext',
+			formatversion: 2
+		}).then(function (d) {
+			var norm = fileName.replace(/ /g, '_').toLowerCase();
+			return ((d.parse && d.parse.images) || []).some(function (im) {
+				return im.replace(/ /g, '_').toLowerCase() === norm;
+			});
+		}, function () { return true; });
 	}
 
 	// Does a template name behave like an infobox (accepts image=/caption=)?
@@ -818,10 +951,6 @@
 
 	function addStyles() {
 		mw.util.addCSS(
-			'#imgsug-fab{position:fixed;bottom:24px;right:24px;z-index:1000;' +
-			'background:#36c;color:#fff;border:0;border-radius:24px;padding:10px 18px;' +
-			'font-size:14px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3);}' +
-			'#imgsug-fab:hover{background:#2a4b8d;}' +
 			'.imgsug-panel-base{position:fixed;top:80px;right:24px;width:560px;max-width:95vw;' +
 			'max-height:75vh;display:flex;flex-direction:column;z-index:1001;' +
 			'background:#fff;border:1px solid #a2a9b1;border-radius:6px;' +
@@ -836,6 +965,9 @@
 			'.imgsug-row{display:flex;gap:10px;align-items:center;padding:8px 0;' +
 			'border-bottom:1px solid #eaecf0;text-decoration:none;color:inherit;}' +
 			'.imgsug-row:hover{background:#f8f9fa;}' +
+			'.imgsug-dismiss{margin-left:auto;flex-shrink:0;color:#a2a9b1;font-size:13px;' +
+			'padding:2px 4px;cursor:pointer;align-self:center;}' +
+			'.imgsug-dismiss:hover{color:#d33;}' +
 			'.imgsug-row img{width:60px;height:45px;object-fit:cover;border-radius:3px;' +
 			'border:1px solid #c8ccd1;background:#f8f9fa;flex-shrink:0;}' +
 			'.imgsug-more{margin:8px 12px;}' +
@@ -843,6 +975,7 @@
 			'padding:10px 12px;font-weight:bold;border-bottom:1px solid #eaecf0;}' +
 			'.imgsug-head span{flex:1;text-align:center;}' +
 			'.imgsug-back{text-decoration:none;color:#36c;font-size:16px;font-weight:bold;}' +
+			'.imgsug-min{text-decoration:none;color:#54595d;font-size:18px;line-height:1;margin-right:10px;}' +
 			'.imgsug-close{text-decoration:none;color:#54595d;font-size:15px;}' +
 			'.imgsug-sub{padding:6px 12px;color:#54595d;border-bottom:1px solid #eaecf0;}' +
 			'.imgsug-body{overflow-y:auto;padding:8px 12px;}' +

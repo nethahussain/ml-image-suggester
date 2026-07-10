@@ -1,14 +1,11 @@
 # Image Suggester for Malayalam Wikipedia
 
 A user script for [ml.wikipedia.org](https://ml.wikipedia.org) that helps illustrate image-less
-articles. When you view a mainspace article that has **no image** but has an **English Wikipedia
-counterpart**, a floating **"📷 ചിത്രനിർദ്ദേശങ്ങൾ"** button (and a toolbox link) appears. Clicking it
-shows the free images used in the English article, and one click adds your chosen image to the
-Malayalam article — in the right place.
-
-It also finds work for you: a **"ചിത്രമില്ലാത്ത ലേഖനങ്ങൾ"** toolbox link (available on every page)
-opens a finder that scans articles and lists only the actionable ones — image-less on mlwiki,
-with an English counterpart that has at least one free image.
+articles. The main entry point is a **"ചിത്രമില്ലാത്ത ലേഖനങ്ങൾ"** toolbox link (available on every
+page) that opens a finder: it scans articles and lists only the actionable ones — image-less on
+mlwiki, with an English counterpart that has at least one free (Commons-hosted) image. Clicking a
+result opens that Malayalam article with a suggestion panel showing the free images used in the
+English article; one click adds your chosen image to the article — in the right place.
 
 ## What counts as "image-less"
 
@@ -33,9 +30,11 @@ icons, and checks each remaining file for existence. Consequences:
    (`en.wikipedia.org/api/rest_v1/page/media-list/…`) and filters it against **Wikimedia
    Commons**: files that exist only locally on English Wikipedia (fair-use / non-free) are
    excluded automatically, since they cannot be used on Malayalam Wikipedia.
-3. The panel shows each candidate with a thumbnail, its Commons license, the English caption
-   prefilled in an editable box (translate to Malayalam before inserting), and a **ചേർക്കുക**
-   button. The English lead image is badged **പ്രധാന ചിത്രം** and sorted first. A **← back** button
+3. The panel shows each candidate with a thumbnail, its Commons license, an editable caption box,
+   and a **ചേർക്കുക** button. The box is prefilled with the English caption — except on
+   **biography pages** (detected via Wikidata `P31 = Q5`, human), where it is prefilled with the
+   person's **Malayalam name** (the page title), since the name alone is often a sufficient caption
+   and only needs expanding. The English lead image is badged **പ്രധാന ചിത്രം** and sorted first. A **← back** button
    lets you leave without editing (returns to the finder you came from). Each caption box has an
    **A / അ** toggle: switch it on and type Malayalam phonetically in Latin letters, switch it off to
    type English again. The transliteration follows Malayalam Wikipedia's own **ml-transliteration
@@ -53,6 +52,11 @@ icons, and checks each remaining file for existence. Consequences:
      parameters are added inside it (just before its closing braces). "Infobox" here includes
      the taxonomy/chemistry/etc. `*box` families — Taxobox, Speciesbox, Drugbox, Chembox,
      Geobox, Starbox — not only templates literally named "Infobox";
+
+   Because mlwiki infoboxes are inconsistent (some take a bare filename in `image=`, others
+   ignore it or expect a full `[[...]]` link), the tool **verifies the result via the parse API**
+   before saving: if the chosen infobox placement doesn't actually render the image, it falls
+   back to a **lead thumbnail** (which always renders). So the image never ends up as stray text.
    - else a **lead thumbnail** `[[പ്രമാണം:<file>|ലഘുചിത്രം|<caption>]]` is added after any leading
      maintenance templates.
    The edit summary names the English source and which placement was used. The infobox is located
@@ -61,13 +65,15 @@ icons, and checks each remaining file for existence. Consequences:
 
 ## Finding articles to illustrate
 
-The finder **auto-continues**: one click keeps pulling batches (40 at a time) until it has
-collected about 6 actionable suggestions, or it has scanned ~500 articles / 20 batches — so you
-rarely have to click through empty batches yourself. A **കൂടുതൽ കാണിക്കുക** (show more) button then
-fetches the next round.
+The finder **auto-continues**: one click keeps pulling batches (40 at a time) until the list holds
+**up to 10** suggestions, or it has scanned ~500 articles / 20 batches — so you rarely have to click
+through empty batches yourself. The list is **capped at 10** entries (it stops adding once full). If
+a sparse source (e.g. people) can't reach 10 within the scan limit, a **കൂടുതൽ കാണിക്കുക** (show more)
+button fetches the next round in place (no page refresh).
 
-The finder also **stays open across page loads** (its mode, query and results are saved in
-`sessionStorage`) until you close it with **✕**. So you can click a result, land on that article,
+The finder also **stays open across page loads** (its mode, query, results and minimized state are
+saved in `sessionStorage`) until you close it with **✕**. A **–** button collapses it to just its
+title bar (**+** to expand again) so it stays out of the way while you read. So you can click a result, land on that article,
 add the image, and the finder is still there to pick the next one — no need to reopen it for every
 page. It sits in the **lower-left corner** so it doesn't cover the suggestion panel on the right.
 When you add an image to an article, the finder **drops that article from its list** (keeping the
@@ -79,9 +85,9 @@ It offers four sources:
 - **എല്ലാ ലേഖനങ്ങളും** — random mainspace articles (sampled in batches).
 - **വ്യക്തികൾ** — people, both living and dead, via a **random-sorted `deepcat` search** of the
   People category tree (`deepcat:"വ്യക്തികൾ"`, ~23k articles). Random sampling means the image-less
-  ones surface quickly (roughly a third of a batch qualifies) instead of hitting well-illustrated
-  celebrities first. The People tree also sweeps in a few non-individuals (ethnic groups, some
-  institutions), which is harmless — they still get relevant image suggestions.
+  ones surface quickly instead of hitting well-illustrated celebrities first. Candidates are then
+  filtered to **actual humans** (Wikidata `P31 = Q5`), so ethnic groups, observance days and
+  institutions that live in the People tree are dropped — you get only biographies.
 - **പ്രവർത്തനരഹിതമായ ചിത്രക്കണ്ണിയുള്ളവ** — articles in MediaWiki's "broken file links" tracking
   category (their infobox/inline image points to a non-existent file); no query needed.
 - **ഒരു വർഗ്ഗത്തിൽ നിന്ന്** — members of a category (the `വർഗ്ഗം:` prefix is optional; the field
@@ -95,7 +101,10 @@ was uploaded *locally* to English Wikipedia (`imagerepository=local`, common for
 Indian subjects) cannot be used on Malayalam Wikipedia, so such articles are dropped — otherwise
 clicking through would open a panel with "no suitable images". Results show the Commons lead
 image as a teaser; clicking one opens the Malayalam article with the suggestion panel already
-open (via a `#imgsug` URL fragment).
+open (via a `#imgsug` URL fragment). Each entry also has a small **✕** on its right to dismiss it
+from the list (for articles you don't want to illustrate). Dismissed articles — and any article
+you add an image to — are remembered in a persistent **skip-list** (`localStorage`), so future
+scans surface *fresh* articles instead of showing you the same ones again.
 
 ## Installation
 
